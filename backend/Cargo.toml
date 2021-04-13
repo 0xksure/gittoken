@@ -1,0 +1,13 @@
+[package]
+name = "backend"
+version = "0.1.0"
+authors = ["kristofferberg-vipps <kristoffer.hovland.berg@vipps.no>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rocket = "0.4.7"
+log = "0.4"
+reqwest = "0.11.2"
+tokio = { version = "1", features = ["full"] }
