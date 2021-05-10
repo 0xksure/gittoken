@@ -41,9 +41,8 @@ contract GitToken {
 
     function addUser(address newUser) public {
         require(msg.sender == owner, "only owners can reset");
-        fraction = balances[msg.sender] * 0.01;
-        balances[msg.sender] -= fraction;
-        balances[newUser] += fraction;
-        emit Transfer(msg.sender, addr, equal_amount);
+        balances[msg.sender] -= balances[msg.sender] / 100;
+        balances[newUser] += balances[msg.sender] / 100;
+        emit Transfer(msg.sender, newUser, 1);
     }
 }

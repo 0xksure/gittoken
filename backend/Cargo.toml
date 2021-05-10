@@ -5,12 +5,25 @@ authors = ["kristofferberg-vipps <kristoffer.hovland.berg@vipps.no>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+authorization = {path ="authorization"}
 rocket = "0.4.7"
 log = "0.4"
 envconfig = "0.9.1"
-diesel = { version = "1.4.4", features = ["postgres"] }
+postgres = "0.19.1"
+futures = "0.3"
+jsonwebtoken = "7"
+refinery-core = "0.5.1"
+env_logger = "0.8.3"
+hyper = "0.14.7"
+rocket_cors = "0.5.2"
+chrono = "0.4.19"
+serde_json = "1.0"
+rocket_contrib = { version = "0.4.7", default-features = false, features = ["json", "serve", "postgres_pool"] }
+refinery = { version = "0.5.0", features = ["postgres","tokio-postgres"] }
 reqwest = { version = "0.11", features = ["json","blocking"] }
 serde = { version = "1.0.125", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+
+
+
