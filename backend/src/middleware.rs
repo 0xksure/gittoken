@@ -12,9 +12,13 @@ pub mod middleware {
                 kind: Kind::Request | Kind::Response,
             }
         }
-        fn on_request(&self, request: &mut Request, _: &Data) {
+        fn on_request(&self, request: &mut Request, data: &Data) {
             log::info!("Request ");
             log::info!("uri: {}:", request.uri().path());
+            log::info!("format {:?}", request.format());
+            if data.peek_complete() {
+                log::info!("all of the data: {:?}", data.peek());
+            }
             request
                 .headers()
                 .get("Authorization")

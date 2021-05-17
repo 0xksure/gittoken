@@ -15,8 +15,11 @@ use rocket::request::{FromRequest, Outcome, Request};
 use rocket::response::{self, Responder, Response};
 use rocket::State;
 use serde::{Deserialize, Serialize};
+use std::io::prelude::*;
 use std::io::Cursor;
 mod github;
+use github::github_api::{GithubConfig, User};
+use openssl::pkey::PKey;
 use rocket_contrib::json::{Json, JsonValue};
 mod lib;
 use lib::web_error::WebError::WebError;
@@ -25,6 +28,7 @@ mod user;
 use rocket_contrib::database;
 use rocket_contrib::databases::postgres;
 use rocket_cors::{AllowedHeaders, AllowedOrigins};
+use std::fs::File;
 extern crate authorization;
 #[database("my_db")]
 struct MyPgDatabase(postgres::Connection);
@@ -32,19 +36,26 @@ struct MyPgDatabase(postgres::Connection);
 #[derive(Envconfig)]
 struct Config {
     #[envconfig(from = "GITHUB_OAUTH_CLIENT_ID")]
-    pub client_id: String,
+    pub oauth_client_id: String,
     #[envconfig(from = "GITHUB_OAUTH_SECRET")]
-    pub client_secret: String,
+    pub oauth_client_secret: String,
+    #[envconfig(from = "GITHUB_APP_CLIENT_ID")]
+    pub app_client_id: String,
+    #[envconfig(from = "GITHUB_APP_SECRET")]
+    pub app_client_secret: String,
     #[envconfig(from = "DATABASE_URL")]
     pub database_url: String,
     #[envconfig(from = "SHARED_KEY")]
     pub shared_key: String,
+    #[envconfig(from = "SECRET_TOKEN")]
+    pub secret_token: String,
+    #[envconfig(from = "CERT_PEM_PATH")]
+    pub cert_pem_path: String,
 }
 
 struct Api {
-    client_id: String,
-    client_secret: String,
-    shared_key: String,
+    config: Config,
+    github_app_client: github::github_app::Config,
 }
 
 #[derive(Debug)]
@@ -69,9 +80,20 @@ struct Oauth {
     code: String,
 }
 
+fn empty_string() -> String {
+    "".to_string()
+}
+
+fn empty_usize() -> usize {
+    0
+}
+
 #[derive(Debug, Deserialize)]
 struct AccessTokenResponse {
+    #[serde(default = "empty_string")]
     access_token: String,
+    #[serde(default = "empty_usize")]
+    expires_in: usize,
 }
 
 fn authenticate_user() -> Result<(), WebError> {
@@ -97,16 +119,68 @@ impl<'r, 'a> FromRequest<'r, 'a> for AuthorzationHeader {
     }
 }
 
+#[derive(Deserialize)]
+struct GithubCallbackData {}
+
+#[post("/app/register", data = "<input>")]
+fn register_app_event(input: String, api: State<Api>, conn: MyPgDatabase) -> Status {
+    info!("data: {}", input);
+    Status::Ok
+}
+
 #[get("/user")]
 fn get_user(
     api: State<Api>,
     conn: MyPgDatabase,
     authorization_header: AuthorzationHeader,
-) -> Result<(), ResponseBodyError> {
+) -> Result<Json<User>, ResponseBodyError> {
     let access_token = authorization_header.0;
     info!("Authorization header: {:?}", access_token);
-    Ok(())
+    let github_client = GithubConfig::new(&access_token);
+    let req_client = reqwest::blocking::Client::new();
+    let user = match github_client.user(req_client) {
+        Ok(res) => res,
+        Err(err) => {
+            return Err(ResponseBodyError {
+                status: Status::Unauthorized,
+                message: json!({ "message": format!("{}", err) }),
+            })
+        }
+    };
+
+    Ok(Json(user))
 }
+
+#[get("/github/app/post/status")]
+fn github_app_post_status(api: State<Api>) -> Result<rocket::Response, ResponseBodyError> {
+    info!("github_app_post_status");
+    let installation_id = "31";
+    let access_token = match api
+        .github_app_client
+        .authenticate_app(installation_id.to_string())
+    {
+        Ok(token) => token,
+        Err(err) => {
+            return Err(ResponseBodyError {
+                status: Status::InternalServerError,
+                message: json!({ "message": format!("{}", err) }),
+            })
+        }
+    };
+
+    info!("Access token: {}", access_token);
+    Ok(Response::build().status(Status::Ok).finalize())
+}
+
+#[get("/github/callback")]
+fn github_callback(api: State<Api>) {}
+
+// Post install receives installation id, repo
+#[get("/github/postinstall")]
+fn github_post_insallation(api: State<Api>) {}
+
+#[post("/github/webhook")]
+fn github_webhook(api: State<Api>) {}
 
 #[get("/github/login?<code>")]
 fn github_login<'a>(
@@ -127,8 +201,8 @@ fn github_login<'a>(
     };
     info!("code: {}", _gcode);
     let github_post = Oauth {
-        client_id: api.client_id.clone(),
-        client_secret: api.client_secret.clone(),
+        client_id: api.config.oauth_client_id.clone(),
+        client_secret: api.config.oauth_client_secret.clone(),
         code: _gcode.clone(),
     };
     let req_client = reqwest::blocking::Client::new();
@@ -149,6 +223,7 @@ fn github_login<'a>(
     };
 
     let resp_code = res.status();
+    info!("response code: {}", resp_code);
     if resp_code != reqwest::StatusCode::OK {
         info!("access token response code: {}", resp_code.to_string());
         return Err(ResponseBodyError {
@@ -169,7 +244,7 @@ fn github_login<'a>(
     };
 
     //test request
-    let gh = github::github_api::Gh::new(&access_token.access_token);
+    let gh = GithubConfig::new(&access_token.access_token);
     let gh_user = gh.user(req_client).unwrap();
     info!("github user: {:?}", gh_user);
 
@@ -194,6 +269,7 @@ fn github_login<'a>(
     cookies.add_private(auth_cookie);
     Ok(Response::build().status(Status::Ok).finalize())
 }
+
 fn main() {
     env_logger::init();
     log::info!("[root]");
@@ -205,10 +281,17 @@ fn main() {
         Err(err) => return log::error!("{}", err),
     }
 
+    let mut pem_file = File::open(&cfg.cert_pem_path).unwrap();
+    let mut buffer = Vec::new();
+    match pem_file.read_to_end(&mut buffer) {
+        Ok(_) => (),
+        Err(err) => return log::error!("{}", err),
+    }
+    let buffer: Vec<u8> = buffer;
+    let github_app_client = github::github_app::Config::new("114926".to_string(), buffer);
     let api = Api {
-        client_id: cfg.client_id.clone(),
-        client_secret: cfg.client_secret.clone(),
-        shared_key: cfg.shared_key.clone(),
+        config: cfg,
+        github_app_client: github_app_client,
     };
 
     let cors = rocket_cors::CorsOptions {
@@ -229,6 +312,16 @@ fn main() {
         .attach(cors)
         .attach(MyPgDatabase::fairing())
         .attach(middleware::middleware::Middleware::new())
-        .mount("/v0", routes![github_login, get_user])
+        .mount(
+            "/v0",
+            routes![
+                github_login,
+                get_user,
+                register_app_event,
+                github_app_post_status,
+                github_callback,
+                github_post_insallation
+            ],
+        )
         .launch();
 }

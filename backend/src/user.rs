@@ -23,13 +23,13 @@ pub mod user {
         ) -> Result<(), Error> {
             let query_result = db.query(
                 "
-            INSERT INTO github_user (Username, Name, Token)
-            SELECT CAST($1 as varchar),$2,$3
+            INSERT INTO github_user (Username, Name)
+            SELECT CAST($1 as varchar),$2
             WHERE NOT EXISTS (
                 SELECT id FROM github_user where username=$1
             );
             ",
-                &[&self.user_name, &self.name, &token],
+                &[&self.user_name, &self.name],
             );
 
             match query_result {
