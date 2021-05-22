@@ -119,15 +119,6 @@ impl<'r, 'a> FromRequest<'r, 'a> for AuthorzationHeader {
     }
 }
 
-#[derive(Deserialize)]
-struct GithubCallbackData {}
-
-#[post("/app/register", data = "<input>")]
-fn register_app_event(input: String, api: State<Api>, conn: MyPgDatabase) -> Status {
-    info!("data: {}", input);
-    Status::Ok
-}
-
 #[get("/user")]
 fn get_user(
     api: State<Api>,
@@ -177,10 +168,130 @@ fn github_callback(api: State<Api>) {}
 
 // Post install receives installation id, repo
 #[get("/github/postinstall")]
-fn github_post_insallation(api: State<Api>) {}
+fn github_post_installation(api: State<Api>) {}
 
-#[post("/github/webhook")]
-fn github_webhook(api: State<Api>) {}
+#[derive(Deserialize, Debug)]
+struct Installation {
+    id: usize,
+    node_id: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct GithubBase {
+    id: usize,
+    node_id: String,
+    name: String,
+    full_name: String,
+    private: bool,
+    owner: GithubRepoOwner,
+}
+
+#[derive(Deserialize, Debug)]
+struct GithubPullRequest {
+    #[serde(default = "empty_string")]
+    url: String,
+    #[serde(default = "empty_usize")]
+    id: usize,
+    comments: usize,
+    review_comments: usize,
+    maintainer_can_modify: bool,
+    commits: usize,
+    additions: usize,
+    deletions: usize,
+    changed_files: usize,
+    number: usize,
+}
+fn empty_pull_request() -> GithubPullRequest {
+    GithubPullRequest {
+        url: String::from(""),
+        id: 0,
+        comments: 0,
+        review_comments: 0,
+        maintainer_can_modify: false,
+        commits: 0,
+        additions: 0,
+        deletions: 0,
+        changed_files: 0,
+        number: 0,
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct GithubRepoOwner {
+    login: String,
+    id: usize,
+    node_id: String,
+    url: String,
+    #[serde(rename(deserialize = "type"))]
+    repo_owner_type: String,
+    site_admin: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct GithubRepo {
+    id: usize,
+    node_id: String,
+    name: String,
+    full_name: String,
+    private: bool,
+    owner: GithubRepoOwner,
+}
+
+#[derive(Deserialize, Debug)]
+struct GithubWebhookRequest {
+    action: String,
+    #[serde(default = "empty_pull_request")]
+    pull_request: GithubPullRequest,
+    installation: Installation,
+    repository: GithubRepo,
+}
+// Webhook responsible for
+// - If PR, calculate potential cost
+#[post("/github/webhook", data = "<webhook_data>")]
+fn github_webhook(api: State<Api>, webhook_data: Json<GithubWebhookRequest>) {
+    info!(
+        "github_webhook.request: {}. Body: {:?}",
+        "github webhook request", webhook_data
+    );
+    if webhook_data.pull_request.url != ""
+        && (webhook_data.action == "opened" || webhook_data.action == "reopened")
+    {
+        info!("github_webhook.type.pull_request");
+        let access_token = match api
+            .github_app_client
+            .authenticate_app(webhook_data.installation.id.to_string())
+        {
+            Ok(token) => token,
+            Err(err) => {
+                log::error!("error: {:}", err);
+                return;
+            }
+        };
+
+        // Calculate Pull request score
+        let pr_score = webhook_data.pull_request.additions;
+        let pr_score_comment = format!(
+            ":unicorn: **Total Reward** : {:} OCT (open contribution tokens). [Access your OCTs](http://localhost:5000/)",
+            pr_score
+        );
+
+        let github_client = github::github_api::GithubConfig::new(&access_token.token);
+        match github_client.comment_issue(
+            &webhook_data.repository.owner.login,
+            &webhook_data.repository.name,
+            &webhook_data.pull_request.number.to_string(),
+            &pr_score_comment,
+        ) {
+            Ok(res) => res,
+            Err(err) => {
+                log::error!("error: {:}", err);
+                return;
+            }
+        };
+    }
+
+    info!("github_webhook.finished");
+}
 
 #[get("/github/login?<code>")]
 fn github_login<'a>(
@@ -317,10 +428,10 @@ fn main() {
             routes![
                 github_login,
                 get_user,
-                register_app_event,
                 github_app_post_status,
                 github_callback,
-                github_post_insallation
+                github_webhook,
+                github_post_installation
             ],
         )
         .launch();

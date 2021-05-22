@@ -1,5 +1,6 @@
 pub mod github_api {
     use reqwest;
+    use reqwest::header::ACCEPT;
     use serde::{Deserialize, Serialize};
     use serde_json;
     use std::io::{Error, ErrorKind};
@@ -15,11 +16,30 @@ pub mod github_api {
         pub name: String,
         pub email: Option<String>,
     }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct IssueComment {
+        body: String,
+    }
+
     impl GithubConfig {
         pub fn new(access_token: &str) -> GithubConfig {
             GithubConfig {
                 access_token: access_token.to_string(),
             }
+        }
+
+        fn create_request(
+            &self,
+            path: String,
+            client: reqwest::blocking::Client,
+        ) -> reqwest::blocking::RequestBuilder {
+            let authorization_header = format!("token {}", self.access_token.clone());
+            let url = format!("https://api.github.com/{}", path);
+            client
+                .get(url)
+                .header(reqwest::header::AUTHORIZATION, authorization_header)
+                .header(reqwest::header::USER_AGENT, "request")
         }
 
         pub fn user(&self, client: reqwest::blocking::Client) -> Result<User, Error> {
@@ -57,6 +77,44 @@ pub mod github_api {
             };
             Ok(())
         }
+
+        pub fn comment_issue(
+            &self,
+            owner: &str,
+            repo: &str,
+            issue_number: &str,
+            message: &str,
+        ) -> Result<(), Error> {
+            let authorization_header = format!("token {}", self.access_token.clone());
+            let issue_path = format!("repos/{}/{}/issues/{}/comments", owner, repo, issue_number);
+            let url = format!("https://api.github.com/{}", issue_path);
+            let client = reqwest::blocking::Client::new();
+            let issue_comment = IssueComment {
+                body: message.to_string(),
+            };
+            let res = match client
+                .post(url)
+                .header(reqwest::header::AUTHORIZATION, authorization_header)
+                .header(reqwest::header::USER_AGENT, "request")
+                .header(ACCEPT, "application/json")
+                .json(&issue_comment)
+                .send()
+            {
+                Ok(res) => res,
+                Err(err) => return Err(Error::new(std::io::ErrorKind::Other, format!("{:}", err))),
+            };
+
+            if !res.status().is_success() {
+                return Err(Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "github_app.comment_issue.failure error_code: {}",
+                        res.status()
+                    ),
+                ));
+            }
+            return Ok(());
+        }
     }
 }
 
@@ -78,8 +136,8 @@ pub mod github_app {
     }
     #[derive(Debug, Serialize, Deserialize)]
     pub struct InstallationAccessToken {
-        token: String,
-        expires_at: String,
+        pub token: String,
+        pub expires_at: String,
     }
 
     impl fmt::Display for InstallationAccessToken {
@@ -163,7 +221,7 @@ pub mod github_app {
                 Err(err) => return Err(Error::new(ErrorKind::Other, err)),
             };
 
-            if res.status() != reqwest::StatusCode::OK {
+            if !res.status().is_success() {
                 info!("authenticate_app.access_token.failure");
                 return Err(Error::new(
                     ErrorKind::Other,
