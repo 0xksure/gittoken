@@ -7,6 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 authorization = {path ="authorization"}
+rithub = {path ="rithub"}
 rocket = "0.4.7"
 log = "0.4"
 envconfig = "0.9.1"
@@ -25,6 +26,8 @@ refinery = { version = "0.5.0", features = ["postgres","tokio-postgres"] }
 reqwest = { version = "0.11", features = ["json","blocking"] }
 serde = { version = "1.0.125", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+solana-client = "1.7.0"
+
 
 
 

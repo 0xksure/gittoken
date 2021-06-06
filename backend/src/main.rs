@@ -5,59 +5,31 @@ extern crate rocket_contrib;
 
 #[macro_use]
 extern crate rocket;
+
 use envconfig::Envconfig;
-use hyper::StatusCode;
 use log::info;
 use reqwest::header::ACCEPT;
 use reqwest::{self, redirect};
+use rithub::api::api;
+use rithub::app::app;
+use rithub::headers::rocket_request_headers;
+use rithub::webhook::webhook;
 use rocket::http::{ContentType, Cookie, Cookies, SameSite, Status};
 use rocket::request::{FromRequest, Outcome, Request};
 use rocket::response::{self, Responder, Response};
 use rocket::State;
 use serde::{Deserialize, Serialize};
-use std::io::prelude::*;
-use std::io::Cursor;
-mod github;
-use github::github_api::{GithubConfig, User};
+use std::{borrow::Borrow, io::prelude::*};
+mod handlers;
 use openssl::pkey::PKey;
 use rocket_contrib::json::{Json, JsonValue};
 mod lib;
 use lib::web_error::WebError::WebError;
 mod middleware;
 mod user;
-use rocket_contrib::database;
-use rocket_contrib::databases::postgres;
 use rocket_cors::{AllowedHeaders, AllowedOrigins};
 use std::fs::File;
 extern crate authorization;
-#[database("my_db")]
-struct MyPgDatabase(postgres::Connection);
-
-#[derive(Envconfig)]
-struct Config {
-    #[envconfig(from = "GITHUB_OAUTH_CLIENT_ID")]
-    pub oauth_client_id: String,
-    #[envconfig(from = "GITHUB_OAUTH_SECRET")]
-    pub oauth_client_secret: String,
-    #[envconfig(from = "GITHUB_APP_CLIENT_ID")]
-    pub app_client_id: String,
-    #[envconfig(from = "GITHUB_APP_SECRET")]
-    pub app_client_secret: String,
-    #[envconfig(from = "DATABASE_URL")]
-    pub database_url: String,
-    #[envconfig(from = "SHARED_KEY")]
-    pub shared_key: String,
-    #[envconfig(from = "SECRET_TOKEN")]
-    pub secret_token: String,
-    #[envconfig(from = "CERT_PEM_PATH")]
-    pub cert_pem_path: String,
-}
-
-struct Api {
-    config: Config,
-    github_app_client: github::github_app::Config,
-}
-
 #[derive(Debug)]
 struct ResponseBodyError {
     status: Status,
@@ -79,7 +51,6 @@ struct Oauth {
     client_secret: String,
     code: String,
 }
-
 fn empty_string() -> String {
     "".to_string()
 }
@@ -121,20 +92,20 @@ impl<'r, 'a> FromRequest<'r, 'a> for AuthorzationHeader {
 
 #[get("/user")]
 fn get_user(
-    api: State<Api>,
-    conn: MyPgDatabase,
+    api: State<handlers::Api>,
+    conn: handlers::MyPgDatabase,
     authorization_header: AuthorzationHeader,
-) -> Result<Json<User>, ResponseBodyError> {
+) -> Result<Json<api::User>, ResponseBodyError> {
     let access_token = authorization_header.0;
     info!("Authorization header: {:?}", access_token);
-    let github_client = GithubConfig::new(&access_token);
+    let github_client = api::Config::new(&access_token);
     let req_client = reqwest::blocking::Client::new();
     let user = match github_client.user(req_client) {
         Ok(res) => res,
         Err(err) => {
             return Err(ResponseBodyError {
                 status: Status::Unauthorized,
-                message: json!({ "message": format!("{}", err) }),
+                message: json!({ "message": format!("{:?}", err) }),
             })
         }
     };
@@ -143,7 +114,9 @@ fn get_user(
 }
 
 #[get("/github/app/post/status")]
-fn github_app_post_status(api: State<Api>) -> Result<rocket::Response, ResponseBodyError> {
+fn github_app_post_status(
+    api: State<handlers::Api>,
+) -> Result<rocket::Response, ResponseBodyError> {
     info!("github_app_post_status");
     let installation_id = "31";
     let access_token = match api
@@ -162,132 +135,50 @@ fn github_app_post_status(api: State<Api>) -> Result<rocket::Response, ResponseB
     info!("Access token: {}", access_token);
     Ok(Response::build().status(Status::Ok).finalize())
 }
-
-#[get("/github/callback")]
-fn github_callback(api: State<Api>) {}
-
-// Post install receives installation id, repo
-#[get("/github/postinstall")]
-fn github_post_installation(api: State<Api>) {}
-
-#[derive(Deserialize, Debug)]
-struct Installation {
-    id: usize,
-    node_id: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct GithubBase {
-    id: usize,
-    node_id: String,
-    name: String,
-    full_name: String,
-    private: bool,
-    owner: GithubRepoOwner,
-}
-
-#[derive(Deserialize, Debug)]
-struct GithubPullRequest {
-    #[serde(default = "empty_string")]
-    url: String,
-    #[serde(default = "empty_usize")]
-    id: usize,
-    comments: usize,
-    review_comments: usize,
-    maintainer_can_modify: bool,
-    commits: usize,
-    additions: usize,
-    deletions: usize,
-    changed_files: usize,
-    number: usize,
-}
-fn empty_pull_request() -> GithubPullRequest {
-    GithubPullRequest {
-        url: String::from(""),
-        id: 0,
-        comments: 0,
-        review_comments: 0,
-        maintainer_can_modify: false,
-        commits: 0,
-        additions: 0,
-        deletions: 0,
-        changed_files: 0,
-        number: 0,
-    }
-}
-
-#[derive(Deserialize, Debug)]
-struct GithubRepoOwner {
-    login: String,
-    id: usize,
-    node_id: String,
-    url: String,
-    #[serde(rename(deserialize = "type"))]
-    repo_owner_type: String,
-    site_admin: bool,
-}
-
-#[derive(Deserialize, Debug)]
-struct GithubRepo {
-    id: usize,
-    node_id: String,
-    name: String,
-    full_name: String,
-    private: bool,
-    owner: GithubRepoOwner,
-}
-
-#[derive(Deserialize, Debug)]
-struct GithubWebhookRequest {
-    action: String,
-    #[serde(default = "empty_pull_request")]
-    pull_request: GithubPullRequest,
-    installation: Installation,
-    repository: GithubRepo,
-}
 // Webhook responsible for
 // - If PR, calculate potential cost
 #[post("/github/webhook", data = "<webhook_data>")]
-fn github_webhook(api: State<Api>, webhook_data: Json<GithubWebhookRequest>) {
+fn github_webhook(
+    api: State<handlers::Api>,
+    db: handlers::MyPgDatabase,
+    webhook_data: Json<webhook::WebhookRequest>,
+    github_headers: rocket_request_headers::GithubWebhookHeaders,
+) {
     info!(
         "github_webhook.request: {}. Body: {:?}",
         "github webhook request", webhook_data
     );
-    if webhook_data.pull_request.url != ""
-        && (webhook_data.action == "opened" || webhook_data.action == "reopened")
-    {
-        info!("github_webhook.type.pull_request");
-        let access_token = match api
-            .github_app_client
-            .authenticate_app(webhook_data.installation.id.to_string())
-        {
-            Ok(token) => token,
-            Err(err) => {
-                log::error!("error: {:}", err);
-                return;
+    let data = webhook_data.into_inner();
+    // Created pull request
+    let request_type = webhook::WebhookRequest::get_webhook_type(github_headers, &data);
+    info!("github.webhook.request_type {:?} ", request_type);
+    match request_type {
+        webhook::WebhookType::Open => {
+            info!("github.webhook.pull_request.open");
+            match handlers::pull_request(&data, api.inner()) {
+                Ok(_) => info!("github.webhook.pull_request.success"),
+                Err(_) => info!("github.webhook.pull_request.fail"),
             }
-        };
-
-        // Calculate Pull request score
-        let pr_score = webhook_data.pull_request.additions;
-        let pr_score_comment = format!(
-            ":unicorn: **Total Reward** : {:} OCT (open contribution tokens). [Access your OCTs](http://localhost:5000/)",
-            pr_score
-        );
-
-        let github_client = github::github_api::GithubConfig::new(&access_token.token);
-        match github_client.comment_issue(
-            &webhook_data.repository.owner.login,
-            &webhook_data.repository.name,
-            &webhook_data.pull_request.number.to_string(),
-            &pr_score_comment,
-        ) {
-            Ok(res) => res,
-            Err(err) => {
-                log::error!("error: {:}", err);
-                return;
+        }
+        webhook::WebhookType::Review => {
+            info!("github.webhook.pull_request_review.review");
+            match handlers::pull_request_review(&data, api.inner()) {
+                Ok(_) => info!("github.webhook.pull_request_review.success"),
+                Err(_) => info!("github.webhook.pull_request_review.fail"),
             }
-        };
+        }
+        webhook::WebhookType::Approved => {
+            info!("github.webhook.pull_request_review");
+        }
+        webhook::WebhookType::Merged => {
+            info!("github.webhook.pull_request_review.merged");
+            match handlers::merge_pull_request(&data, api.inner(), &db) {
+                Ok(_) => info!("github.webhook.pull_request.success"),
+                Err(_) => info!("github.webhook.pull_request.fail"),
+            }
+        }
+        webhook::WebhookType::Closed => return,
+        webhook::WebhookType::Unknown => return,
     }
 
     info!("github_webhook.finished");
@@ -295,9 +186,9 @@ fn github_webhook(api: State<Api>, webhook_data: Json<GithubWebhookRequest>) {
 
 #[get("/github/login?<code>")]
 fn github_login<'a>(
-    api: State<Api>,
+    api: State<handlers::Api>,
     code: Option<String>,
-    conn: MyPgDatabase,
+    conn: handlers::MyPgDatabase,
     mut cookies: Cookies,
 ) -> Result<rocket::Response<'a>, ResponseBodyError> {
     info!("github_login");
@@ -355,7 +246,7 @@ fn github_login<'a>(
     };
 
     //test request
-    let gh = GithubConfig::new(&access_token.access_token);
+    let gh = api::Config::new(&access_token.access_token);
     let gh_user = gh.user(req_client).unwrap();
     info!("github user: {:?}", gh_user);
 
@@ -384,7 +275,7 @@ fn github_login<'a>(
 fn main() {
     env_logger::init();
     log::info!("[root]");
-    let cfg = Config::init_from_env().unwrap();
+    let cfg = handlers::Config::init_from_env().unwrap();
 
     let migration_result = lib::migrate(&cfg.database_url);
     match migration_result {
@@ -399,8 +290,8 @@ fn main() {
         Err(err) => return log::error!("{}", err),
     }
     let buffer: Vec<u8> = buffer;
-    let github_app_client = github::github_app::Config::new("114926".to_string(), buffer);
-    let api = Api {
+    let github_app_client = app::Config::new("114926".to_string(), buffer);
+    let api = handlers::Api {
         config: cfg,
         github_app_client: github_app_client,
     };
@@ -421,7 +312,7 @@ fn main() {
     rocket::ignite()
         .manage(api)
         .attach(cors)
-        .attach(MyPgDatabase::fairing())
+        .attach(handlers::MyPgDatabase::fairing())
         .attach(middleware::middleware::Middleware::new())
         .mount(
             "/v0",
@@ -429,9 +320,7 @@ fn main() {
                 github_login,
                 get_user,
                 github_app_post_status,
-                github_callback,
                 github_webhook,
-                github_post_installation
             ],
         )
         .launch();

@@ -1,5 +1,4 @@
 pub mod user {
-    use futures::executor::block_on;
     use rocket_contrib::databases::postgres;
     use std::io::{Error, ErrorKind};
 
@@ -36,6 +35,54 @@ pub mod user {
                 Ok(_) => return Ok(()),
                 Err(err) => return Err(Error::new(ErrorKind::Other, format!("{}", err))),
             }
+        }
+
+        pub fn add_address_to_user(
+            &self,
+            db: &postgres::Connection,
+            address: &str,
+        ) -> Result<(), Error> {
+            let query_res = db.query(
+                "
+            UPDATE github_user(Eaddress) 
+            VALUES ($1)
+            WHERE Username=$2
+            ",
+                &[&address, &self.user_name],
+            );
+
+            match query_res {
+                Ok(_) => return Ok(()),
+                Err(err) => return Err(Error::new(ErrorKind::Other, format!("{}", err))),
+            }
+        }
+
+        pub fn get_address_from_username(
+            &self,
+            db: &postgres::Connection,
+        ) -> Result<String, Error> {
+            let mut address = String::from("");
+            for row in &db
+                .query(
+                    "
+            SELECT Eaddress 
+            FROM github_user
+            WHERE Username=$1
+            ",
+                    &[&self.user_name],
+                )
+                .unwrap()
+            {
+                address = row.get("Eaddress");
+            }
+
+            if address == "" {
+                return Err(Error::new(
+                    ErrorKind::Other,
+                    format!("could not retrieve address"),
+                ));
+            }
+            Ok(address)
         }
     }
 }

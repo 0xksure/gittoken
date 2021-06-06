@@ -1,0 +1,31 @@
+[package]
+name = "rithub"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "rithub"
+path = "src/lib.rs"
+
+[dependencies]
+error = {path="error"}
+headers = {path="headers"}
+webhook = {path="webhook"}
+app = {path="app"}
+chrono = "0.4.19"
+rocket = "0.4.7"
+reqwest = { version = "0.11", features = ["json","blocking"] }
+serde = { version = "1.0.125", features = ["derive"] }
+serde_json = "1.0"
+
+
+[workspace]
+members = [
+    "error",
+    "headers",
+    "webhook",
+    "src",
+    "app"
+]
