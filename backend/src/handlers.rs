@@ -1,15 +1,30 @@
+use crate::sdk;
+use crate::user::user::User;
 use envconfig::Envconfig;
 use log::info;
 use rithub::api::api::{self, ReviewComment};
 use rithub::app::app;
 use rithub::error::errors::Error;
-use rocket_contrib::databases::postgres;
-
 use rithub::webhook::webhook::WebhookRequest;
 use rocket_contrib::database;
+use rocket_contrib::databases::postgres;
 use solana_client::rpc_client::RpcClient;
-
-use crate::user::user::User;
+use solana_sdk::instruction::AccountMeta;
+use solana_sdk::{
+    commitment_config::CommitmentConfig,
+    instruction::Instruction,
+    message::Message,
+    native_token::*,
+    program_option::COption,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    signature::{Keypair, Signer},
+    system_instruction, system_program,
+    transaction::Transaction,
+};
+use std::borrow::Borrow;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 #[database("my_db")]
 pub struct MyPgDatabase(postgres::Connection);
 
@@ -200,6 +215,16 @@ pub fn merge_pull_request(
     users.sort();
     users.dedup();
 
+    let owner = &webhook_data.pull_request.user.login;
+    let owner_user = User::new(&owner, &owner);
+    let owner_addr = match owner_user.get_address_from_username(&db) {
+        Ok(addr) => addr,
+        Err(err) => {
+            log::error!("error: {:?}", err);
+            return Err(Error::new(500, String::from("oh no")));
+        }
+    };
+
     for username in users {
         let review_score_comment = review_score_for_user(review_comments_, &username);
         let review_score_comment_atuser = format!("@{}: {}", username, review_score_comment);
@@ -223,7 +248,14 @@ pub fn merge_pull_request(
             }
         };
 
-        let client = RpcClient::new(String::from("http://localhost::8899"));
+        match sdk::transfer_token(&owner_addr, &addr, 10) {
+            Ok(res) => res,
+            Err(err) => return Err(err),
+        };
     }
     Ok(())
+}
+
+pub fn create_account(owner_addr: &str, addr: &str) -> Result<(), Error> {
+    sdk::create_account(owner_addr, addr)?;
 }

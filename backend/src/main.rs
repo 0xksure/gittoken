@@ -21,6 +21,7 @@ use rocket::State;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Borrow, io::prelude::*};
 mod handlers;
+pub mod sdk;
 use openssl::pkey::PKey;
 use rocket_contrib::json::{Json, JsonValue};
 mod lib;
