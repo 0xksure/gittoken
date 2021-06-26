@@ -45,6 +45,7 @@ pub fn create_account(owner_addr: &str, addr: &str) -> Result<(), Error> {
     let mint_authority = "2J3WneHkTnoxac83xAazUXKZ5JbYmt3Be4CPbnEu2i1s";
     let token_program_id = "DHZypXyN9vRh24S8UgP37DeQ9dpCndDVCTQMMDvuNX8g";
     let owner_pubkey = Pubkey::new(owner_addr.as_bytes());
+
     let create_account = system_instruction::create_account(
         &owner_pubkey,
         &Pubkey::new(addr.as_bytes()),

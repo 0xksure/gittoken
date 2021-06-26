@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import {fetchAPI} from "./api/api"
     import queryString from "query-string";
     let error_message ="";

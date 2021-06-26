@@ -6,6 +6,11 @@ import { terser } from 'rollup-plugin-terser';
 import sveltePreprocess from 'svelte-preprocess';
 import typescript from '@rollup/plugin-typescript';
 import css from 'rollup-plugin-css-only';
+import json from '@rollup/plugin-json';
+import nodePolyfills from 'rollup-plugin-node-polyfills';
+import nodeResolve from '@rollup/plugin-node-resolve';
+
+
 
 const production = !process.env.ROLLUP_WATCH;
 
@@ -36,9 +41,13 @@ export default {
 		sourcemap: true,
 		format: 'iife',
 		name: 'app',
-		file: 'public/build/bundle.js'
+		file: 'public/build/bundle.js',
+		globals: {
+			"buffer":"buffer",
+		}
 	},
 	plugins: [
+		
 		svelte({
 			preprocess: sveltePreprocess({ sourceMap: !production }),
 			compilerOptions: {
@@ -46,6 +55,7 @@ export default {
 				dev: !production
 			}
 		}),
+		
 		// we'll extract any component CSS out into
 		// a separate file - better for performance
 		css({ output: 'bundle.css' }),
@@ -57,14 +67,25 @@ export default {
 		// https://github.com/rollup/plugins/tree/master/packages/commonjs
 		resolve({
 			browser: true,
-			dedupe: ['svelte']
+			dedupe: ['svelte'],
+			preferBuiltins:true
 		}),
-		commonjs(),
+		
+		commonjs({
+			include: ['node_modules/**']
+		  }),
+		nodeResolve({
+			browser: true,
+			dedupe: ['bn.js', 'buffer'],
+			extensions: ['.js', '.ts'],
+			preferBuiltins: true,
+		  }),
+		nodePolyfills(),
 		typescript({
 			sourceMap: !production,
 			inlineSources: !production
 		}),
-
+		
 		// In dev mode, call `npm run start` once
 		// the bundle has been generated
 		!production && serve(),
@@ -75,7 +96,10 @@ export default {
 
 		// If we're building for production (npm run build
 		// instead of npm run dev), minify
-		production && terser()
+		production && terser(),
+	
+		json(),
+	
 	],
 	watch: {
 		clearScreen: false

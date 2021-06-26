@@ -114,6 +114,26 @@ fn get_user(
     Ok(Json(user))
 }
 
+#[derive(Deserialize, Debug)]
+struct TransferData {
+    from: String,
+    to: String,
+    amount: u64,
+}
+#[post("/github/app/send_token", data = "<transfer_data>")]
+fn github_app_send_tokens(
+    api: State<handlers::Api>,
+    transfer_data: Json<TransferData>,
+) -> Result<rocket::Response, ResponseBodyError> {
+    match sdk::transfer_token(&transfer_data.from, &transfer_data.to, transfer_data.amount) {
+        Ok(res) => Ok(Response::build().status(Status::Ok).finalize()),
+        Err(err) => Err(ResponseBodyError {
+            status: Status::InternalServerError,
+            message: json!({ "message": "not able to send tokens" }),
+        }),
+    }
+}
+
 #[get("/github/app/post/status")]
 fn github_app_post_status(
     api: State<handlers::Api>,

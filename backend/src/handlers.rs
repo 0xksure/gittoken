@@ -255,7 +255,3 @@ pub fn merge_pull_request(
     }
     Ok(())
 }
-
-pub fn create_account(owner_addr: &str, addr: &str) -> Result<(), Error> {
-    sdk::create_account(owner_addr, addr)?;
-}
